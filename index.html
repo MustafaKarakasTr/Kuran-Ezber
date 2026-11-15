@@ -61,6 +61,8 @@
     }
 
     .word-chip {
+      scroll-margin-top: 110px;
+      scroll-margin-bottom: 130px;
       transition: transform 0.14s cubic-bezier(0.22, 1, 0.36, 1),
                   background-color 0.14s ease,
                   border-color 0.14s ease,
@@ -85,6 +87,11 @@
     .word-chip.active-word .meaning-word-text {
       color: #ffffff !important;
       border-color: rgba(255, 255, 255, 0.25) !important;
+    }
+
+    .verse-card {
+      scroll-margin-top: 100px;
+      scroll-margin-bottom: 120px;
     }
 
     .verse-end-badge {
@@ -833,7 +840,6 @@
     }
 
     function lookupVerifiedTurkishMeaning(arabicWord, apiTranslationObj) {
-      // 1) Quran.com API'den doğrudan Türkçe geldiyse kullan
       if (
         apiTranslationObj &&
         apiTranslationObj.language_name === 'turkish' &&
@@ -845,7 +851,6 @@
 
       if (!arabicWord) return '';
 
-      // Şeddeli إِنَّا (Şüphesiz biz) ile أَنَا (Ben) ayrımı
       const rawStripped = arabicWord.replace(/[^\u0621-\u0652\u0670\u0671]/g, '');
       if (/^إِنَّا/.test(rawStripped) || /^ٱنَّا/.test(rawStripped)) {
         return 'Şüphesiz biz';
@@ -854,12 +859,10 @@
       const norm = normalizeArabicKey(arabicWord);
       if (!norm) return '';
 
-      // 2) Tam eşleşme
       if (VERIFIED_QURAN_LEXICON[norm]) {
         return VERIFIED_QURAN_LEXICON[norm];
       }
 
-      // 3) Başındaki 'و' (Ve) veya 'ف' (Artık / Ve) bağlacını ayrıştırarak kontrol et
       if (norm.length > 3 && (norm.startsWith('و') || norm.startsWith('ف'))) {
         const prefixLabel = norm.startsWith('و') ? 'Ve ' : 'Artık ';
         const stem = norm.slice(1);
@@ -869,7 +872,6 @@
         }
       }
 
-      // 4) Başındaki 'ب' (İle) veya 'ل' (İçin / -e) harf-i cerrini ayrıştırarak kontrol et
       if (norm.length > 3 && (norm.startsWith('ب') || norm.startsWith('ل'))) {
         const stem = norm.slice(1);
         const withAl = 'ال' + stem;
@@ -881,7 +883,6 @@
         }
       }
 
-      // Doğrulanmış Türkçe karşılık yoksa İngilizce metni kesinlikle gösterme
       return '';
     }
 
@@ -891,7 +892,6 @@
       }
       let s = rawTranslit.trim();
 
-      // İngilizce fonetik kalıpları Türkçe Kur'an okunuşuna dönüştür
       const rules = [
         [/sh/gi, 'ş'],
         [/kh/gi, 'h'],
@@ -947,7 +947,7 @@
       verses: [],
       reciterAudioMap: new Map(),
       chapterRecitationData: null,
-      playbackSourceMode: 'ayah-qcom', // 'ayah-qcom' | 'chapter-qcom' | 'everyayah-fallback'
+      playbackSourceMode: 'ayah-qcom',
       activeVerseStartMs: 0,
       activeVerseEndMs: 0,
       syncOffsetSec: 0,
@@ -955,7 +955,6 @@
       activeWordId: null,
       isPlaying: false,
       playbackRate: 1.0,
-      // A-B Ezber Döngüsü
       rangeStart: 1,
       rangeEnd: 11,
       repeatTarget: 1,
@@ -964,20 +963,18 @@
       pauseTimerId: null,
       rangeLoopCount: 1,
       rangeTourCounter: 1,
-      // Zincirleme Ezber
       chainMode: false,
       chainPhase: 'drill',
       chainTargetVerse: 1,
       chainLinkCursor: 1,
-      // Besmele Giriş Durumu
       playIntroBasmalah: true,
       isPlayingIntro: false,
       introStage: null,
       introQueue: [],
       pendingStartIdx: 0,
-      // Görünüm ve Geçiş Korumaları
       autoScroll: true,
       lastScrolledVerseNumber: null,
+      lastScrollTimestamp: 0,
       showTranslit: true,
       showWordMeaning: true,
       isTransitioningVerse: false,
@@ -1071,9 +1068,32 @@
 
     /**
      * ============================================================================
-     * 4. YARDIMCI FONKSİYONLAR
+     * 4. YARDIMCI FONKSİYONLAR & AKILLI OTO-KAYDIRMA
      * ============================================================================
      */
+    function ensureElementInSafeViewport(el, forceCenter = false) {
+      if (!el || !state.autoScroll) return;
+      const now = performance.now();
+      const rect = el.getBoundingClientRect();
+      const topSafe = 95;
+      const bottomSafe = window.innerWidth < 1024 ? 140 : 60;
+      const safeBottomLimit = window.innerHeight - bottomSafe;
+
+      const isOutOfSafeZone =
+        rect.top < topSafe ||
+        rect.bottom > safeBottomLimit ||
+        (forceCenter && (rect.top < topSafe + 20 || rect.bottom > safeBottomLimit - 30));
+
+      if (isOutOfSafeZone && (forceCenter || now - state.lastScrollTimestamp > 320)) {
+        state.lastScrollTimestamp = now;
+        el.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest'
+        });
+      }
+    }
+
     function setStatus(statusType, text) {
       dom.diagText.textContent = text;
       dom.diagDot.className = 'w-2 h-2 rounded-full';
@@ -1180,7 +1200,6 @@
         dom.repeatProgressBar.style.width = `${pct}%`;
       }
 
-      // Aktif ayet kartı üzerindeki rozeti de güncelle
       const currentVerse = state.verses[state.currentVerseIdx];
       document.querySelectorAll('.verse-repeat-pill').forEach((el) => el.classList.add('hidden'));
       if (currentVerse) {
@@ -1265,9 +1284,7 @@
             }
           });
         }
-      } catch (e) {
-        // Yedek EveryAyah akışına geçilecek
-      }
+      } catch (e) {}
 
       if (state.reciterAudioMap.size === 0) {
         try {
@@ -1290,9 +1307,7 @@
               timestampsMap: tsMap
             };
           }
-        } catch (e) {
-          // EveryAyah yedek akışı kullanılacak
-        }
+        } catch (e) {}
       }
     }
 
@@ -1305,10 +1320,7 @@
       dom.surahArabicHeader.textContent = surahMeta.name;
       dom.surahTurkishHeader.textContent = `${surahMeta.number}. ${surahMeta.turkishName} Suresi (${surahMeta.numberOfAyahs} Ayet)`;
 
-      // Tevbe Suresi (9) ve Fatiha Suresi (1) başlık gösterimi
-      if (state.currentSurahNumber === 9) {
-        dom.bismillahDisplay.classList.add('hidden');
-      } else if (state.currentSurahNumber === 1) {
+      if (state.currentSurahNumber === 9 || state.currentSurahNumber === 1) {
         dom.bismillahDisplay.classList.add('hidden');
       } else {
         dom.bismillahDisplay.classList.remove('hidden');
@@ -1351,7 +1363,6 @@
           const verseKey = `${surahNumber}:${numInSurah}`;
           const trText = (diyanetAyahs[idx] && diyanetAyahs[idx].text) ? diyanetAyahs[idx].text : '';
 
-          // Mushaf metni başındaki otomatik besmeleyi (Fatiha hariç 1. ayette) temizle
           let cleanArabicText = arAyah.text || '';
           if (surahNumber !== 1 && numInSurah === 1) {
             cleanArabicText = cleanArabicText
@@ -1399,7 +1410,6 @@
             }));
           }
 
-          // Ağırlıklı orantısal sınırları hesapla
           const weights = words.map((w) => Math.max(2, w.arabic.replace(/[\u064B-\u065F\u0670]/g, '').length));
           const totalW = weights.reduce((a, b) => a + b, 0) || 1;
           let acc = 0;
@@ -1452,7 +1462,6 @@
         card.id = `verse-card-${verse.numberInSurah}`;
         card.className = 'verse-card rounded-2xl bg-ivoryCard dark:bg-nightCard border border-ivoryBorder dark:border-nightBorder p-4 sm:p-5 shadow-xs transition-all duration-200';
 
-        // Kart Üst Bilgisi
         const topRow = document.createElement('div');
         topRow.className = 'flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b border-ivoryBorder/70 dark:border-nightBorder/70';
         topRow.innerHTML = `
@@ -1479,7 +1488,6 @@
         `;
         card.appendChild(topRow);
 
-        // Kelime Akışı (RTL)
         const wordsWrap = document.createElement('div');
         wordsWrap.dir = 'rtl';
         wordsWrap.className = 'flex flex-wrap items-stretch justify-start gap-2.5 sm:gap-3';
@@ -1530,7 +1538,6 @@
           wordsWrap.appendChild(btn);
         });
 
-        // Ayet Sonu Rozeti
         const endBadgeWrap = document.createElement('div');
         endBadgeWrap.className = 'flex items-center self-center px-1';
         endBadgeWrap.innerHTML = `<span class="verse-end-badge" title="${verse.numberInSurah}. Ayet Sonu">﴿${verse.numberInSurah}﴾</span>`;
@@ -1538,7 +1545,6 @@
 
         card.appendChild(wordsWrap);
 
-        // Diyanet Tam Meali
         const mealBox = document.createElement('div');
         mealBox.className = 'mt-4 pt-3 border-t border-ivoryBorder/70 dark:border-nightBorder/70 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed flex items-start gap-2';
         mealBox.innerHTML = `
@@ -1550,7 +1556,6 @@
         dom.versesListContainer.appendChild(card);
       });
 
-      // Kart üzerindeki "Dinle" ve "Tekrarla" butonlarını bağla
       document.querySelectorAll('.verse-play-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           const idx = Number(btn.dataset.playIdx);
@@ -1689,13 +1694,7 @@
       const chip = document.getElementById(`word-chip-${word.id}`);
       if (chip) {
         chip.classList.add('active-word');
-        if (state.autoScroll) {
-          const rect = chip.getBoundingClientRect();
-          const outOfView = rect.top < 90 || rect.bottom > (window.innerHeight - 95);
-          if (outOfView) {
-            chip.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-          }
-        }
+        ensureElementInSafeViewport(chip, false);
       }
 
       dom.activeAyahPill.textContent = verse.verseKey;
@@ -1737,10 +1736,10 @@
 
       if (state.autoScroll && state.lastScrolledVerseNumber !== verse.numberInSurah) {
         state.lastScrolledVerseNumber = verse.numberInSurah;
-        const card = document.getElementById(`verse-card-${verse.numberInSurah}`);
-        if (card) {
-          card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+        const firstWord = verse.words[initialWordIdx] || verse.words[0];
+        const targetEl = (firstWord && document.getElementById(`word-chip-${firstWord.id}`)) ||
+          document.getElementById(`verse-card-${verse.numberInSurah}`);
+        ensureElementInSafeViewport(targetEl, true);
       }
 
       const audio = dom.audio;
@@ -1849,7 +1848,6 @@
       state.isTransitioningVerse = true;
       clearAllActiveWordHighlights();
 
-      // Besmele girişi bittiyse 1. ayete geç
       if (state.isPlayingIntro) {
         playNextIntroStage();
         return;
@@ -1863,7 +1861,6 @@
 
       const currentNum = currentVerse.numberInSurah;
 
-      // A) ZİNCİRLEME EZBER (HAFIZLIK MODU)
       if (state.chainMode) {
         if (state.chainPhase === 'drill') {
           if (state.repeatTarget === 0 || state.repeatCounter < state.repeatTarget) {
@@ -1872,7 +1869,6 @@
             scheduleNextAction(() => playVerse(state.currentVerseIdx, 0));
             return;
           }
-          // Mevcut ayetin N tekrarı bitti
           if (state.chainTargetVerse > state.rangeStart) {
             state.chainPhase = 'link';
             state.chainLinkCursor = state.rangeStart;
@@ -1883,7 +1879,6 @@
             scheduleNextAction(() => playVerse(startIdx !== -1 ? startIdx : 0, 0));
             return;
           }
-          // İlk ayetse doğrudan sonraki ayete geç
           if (state.chainTargetVerse < state.rangeEnd) {
             state.chainTargetVerse += 1;
             state.repeatCounter = 1;
@@ -1912,7 +1907,6 @@
           }
         }
 
-        // Zincirleme tur tamamlandı
         if (state.rangeLoopCount === 0 || state.rangeTourCounter < state.rangeLoopCount) {
           state.rangeTourCounter += 1;
           state.chainTargetVerse = state.rangeStart;
@@ -1930,7 +1924,6 @@
         return;
       }
 
-      // B) STANDART & A-B ARALIK DÖNGÜSÜ
       if (state.repeatTarget === 0 || state.repeatCounter < state.repeatTarget) {
         state.repeatCounter += 1;
         updateRepeatUI();
@@ -1938,7 +1931,6 @@
         return;
       }
 
-      // Mevcut ayetin tekrarları bitti; aralıktaki sonraki ayete geç
       state.repeatCounter = 1;
       updateRepeatUI();
 
@@ -1950,7 +1942,6 @@
         }
       }
 
-      // Seçili A-B aralığının sonuna gelindi; tur kontrolü yap
       if (state.rangeLoopCount === 0 || state.rangeTourCounter < state.rangeLoopCount) {
         state.rangeTourCounter += 1;
         state.repeatCounter = 1;
@@ -1960,7 +1951,6 @@
         return;
       }
 
-      // Tüm turlar tamamlandı
       stopPlayback();
       setStatus('ready', 'Tamamlandı');
     }
@@ -1976,7 +1966,6 @@
         if (state.isPlaying && !audio.paused && !state.isTransitioningVerse) {
           const curSec = audio.currentTime || 0;
 
-          // Tampon donması / takılma bekçisi
           if (Math.abs(curSec - state.lastWatchdogTime) < 0.001) {
             state.watchdogStallTicks += 1;
             if (state.watchdogStallTicks > 240) {
@@ -2098,13 +2087,11 @@
         return;
       }
 
-      // Duraklatılmış bir ses varsa kaldığı yerden devam et
       if (dom.audio.src && !dom.audio.ended && dom.audio.currentTime > 0 && !state.isTransitioningVerse) {
         dom.audio.play().catch(() => {});
         return;
       }
 
-      // Seçili aralığın başından başlat
       const startIdx = state.verses.findIndex((v) => v.numberInSurah === state.rangeStart);
       const targetIdx = startIdx !== -1 ? startIdx : 0;
 
@@ -2166,7 +2153,6 @@
       playVerse(nextIdx, 0);
     }
 
-    // Audio element olayları
     dom.audio.addEventListener('play', () => updatePlayPauseButtonsUI(true));
     dom.audio.addEventListener('pause', () => {
       if (!state.isTransitioningVerse && !state.pauseTimerId) {
@@ -2196,7 +2182,6 @@
       }
     });
 
-    // Scrubber
     dom.audioScrubber.addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value) / 100;
       if (state.playbackSourceMode === 'chapter-qcom' && !state.isPlayingIntro) {
@@ -2208,7 +2193,6 @@
       }
     });
 
-    // Buton Dinleyicileri
     dom.playPauseBtn.addEventListener('click', togglePlayPause);
     dom.mobilePlayPauseBtn.addEventListener('click', togglePlayPause);
     dom.prevVerseBtn.addEventListener('click', goPreviousVerse);
@@ -2238,7 +2222,6 @@
       loadSurahData(state.currentSurahNumber);
     });
 
-    // Okuma Hızı
     document.querySelectorAll('.speed-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const spd = Number(btn.dataset.speed);
@@ -2253,7 +2236,6 @@
       });
     });
 
-    // Takip İnce Ayarı
     dom.syncOffsetSlider.addEventListener('input', (e) => {
       state.syncOffsetSec = parseFloat(e.target.value);
       const sign = state.syncOffsetSec > 0 ? '+' : '';
@@ -2266,7 +2248,6 @@
       dom.syncOffsetValue.textContent = '0.00 sn';
     });
 
-    // A-B Ayet Aralığı
     dom.startVerseSelect.addEventListener('change', (e) => {
       const val = Number(e.target.value);
       state.rangeStart = val;
@@ -2295,7 +2276,6 @@
       updateChainStatusText();
     });
 
-    // Tekrar Sayısı Butonları & Özel Giriş
     document.querySelectorAll('.repeat-preset-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         setRepeatTarget(Number(btn.dataset.repeat));
@@ -2321,7 +2301,6 @@
       updateRepeatUI();
     });
 
-    // Zincirleme Ezber
     dom.chainModeToggleBtn.addEventListener('click', () => {
       state.chainMode = !state.chainMode;
       state.chainTargetVerse = state.rangeStart;
@@ -2341,7 +2320,6 @@
       updateChainStatusText();
     });
 
-    // Görünüm & Besmele Anahtarları
     dom.toggleIntroBasmalahBtn.addEventListener('click', () => {
       state.playIntroBasmalah = !state.playIntroBasmalah;
       dom.dotIntroBasmalah.classList.toggle('bg-emerald-500', state.playIntroBasmalah);
@@ -2353,6 +2331,11 @@
       dom.dotAutoScroll.classList.toggle('bg-emerald-500', state.autoScroll);
       dom.dotAutoScroll.classList.toggle('bg-slate-400', !state.autoScroll);
       dom.mobileAutoScrollBtn.classList.toggle('opacity-50', !state.autoScroll);
+      if (state.autoScroll) {
+        const activeChip = document.querySelector('.word-chip.active-word') ||
+          document.getElementById(`verse-card-${state.verses[state.currentVerseIdx]?.numberInSurah}`);
+        ensureElementInSafeViewport(activeChip, true);
+      }
     }
     dom.toggleAutoScrollBtn.addEventListener('click', toggleAutoScroll);
     dom.mobileAutoScrollBtn.addEventListener('click', toggleAutoScroll);
@@ -2375,12 +2358,10 @@
       dom.dotWordMeaning.classList.toggle('bg-slate-400', !state.showWordMeaning);
     });
 
-    // Tema Değiştirici
     dom.themeToggleBtn.addEventListener('click', () => {
       document.documentElement.classList.toggle('dark');
     });
 
-    // Başlangıç
     populateSurahDropdown();
     loadSurahData(62);
     startSyncEngine();
