@@ -158,11 +158,18 @@
         <div class="relative flex-1 sm:flex-initial min-w-[205px]">
           <label for="reciterSelect" class="sr-only">Hafız Seçin</label>
           <select id="reciterSelect" class="w-full appearance-none bg-ivoryBg dark:bg-nightBg border border-ivoryBorder dark:border-nightBorder hover:border-emeraldBrand focus:border-emeraldBrand focus:outline-none rounded-xl px-3 py-2 pr-8 text-xs sm:text-sm font-medium text-emeraldBrand dark:text-emerald-300 transition cursor-pointer">
-            <option value="Abu_Bakr_Ash-Shaatree_128kbps" data-qcom-id="4">Ebubekir Şatiri</option>
-            <option value="Alafasy_128kbps" data-qcom-id="7">Mishary Rashid Alafasy</option>
-            <option value="Husary_128kbps" data-qcom-id="6">Mahmud Halil el-Husari</option>
-            <option value="MaherAlMuaiqly128kbps" data-qcom-id="10">Mahir el-Muaykli</option>
-            <option value="Abdurrahmaan_As-Sudais_192kbps" data-qcom-id="3">Abdurrahman es-Sudeys</option>
+            <option value="Abu_Bakr_Ash-Shaatree_128kbps" data-qcom-id="4" data-chapter-id="4">Ebubekir Şatiri</option>
+            <option value="Alafasy_128kbps" data-qcom-id="7" data-chapter-id="7">Mishary Rashid Alafasy</option>
+            <option value="Husary_128kbps" data-qcom-id="6" data-chapter-id="6">Mahmud Halil el-Husari</option>
+            <option value="MaherAlMuaiqly128kbps" data-qcom-id="0" data-chapter-id="0">Mahir el-Muaykli</option>
+            <option value="Abdurrahmaan_As-Sudais_192kbps" data-qcom-id="3" data-chapter-id="3">Abdurrahman es-Sudeys</option>
+            <option value="Minshawy_Murattal_128kbps" data-qcom-id="9" data-chapter-id="0">Muhammed Sıddık el-Minşâvî (Murattal)</option>
+            <option value="Abdul_Basit_Murattal_192kbps" data-qcom-id="2" data-chapter-id="0">Abdulbasit Abdussamed (Murattal)</option>
+            <option value="Abdul_Basit_Mujawwad_128kbps" data-qcom-id="1" data-chapter-id="0">Abdulbasit Abdussamed (Mücevved)</option>
+            <option value="Ghamadi_40kbps" data-qcom-id="0" data-chapter-id="0">Saad el-Gâmidî</option>
+            <option value="Saood_ash-Shuraym_128kbps" data-qcom-id="10" data-chapter-id="0">Suud eş-Şureym</option>
+            <option value="Hani_Rifai_192kbps" data-qcom-id="5" data-chapter-id="0">Hânî er-Rifâî</option>
+            <option value="Yasser_Ad-Dussary_128kbps" data-qcom-id="0" data-chapter-id="0">Yasir ed-Devserî</option>
           </select>
           <svg class="w-4 h-4 text-emeraldBrand dark:text-emerald-400 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
@@ -944,6 +951,7 @@
       currentSurahNumber: 62,
       reciterFolder: 'Abu_Bakr_Ash-Shaatree_128kbps',
       reciterQcomId: 4,
+      chapterReciterId: 4,
       verses: [],
       reciterAudioMap: new Map(),
       chapterRecitationData: null,
@@ -1269,11 +1277,14 @@
       dom.endVerseSelect.value = String(totalAyahs);
     }
 
-    async function loadReciterTimingData(surahNumber, qcomReciterId, isCurrent = () => true) {
+    async function loadReciterTimingData(surahNumber, qcomReciterId, isCurrent = () => true, chapterReciterId = qcomReciterId) {
       const audioMap = new Map();
       let chapterData = null;
 
+      // A zero ID means this reciter is served by EveryAyah only. Do not
+      // accidentally query Quran.com with another reciter's numeric ID.
       try {
+        if (!qcomReciterId) throw new Error('No Quran.com verse-recitation ID for this reciter');
         const url = `https://api.quran.com/api/v4/recitations/${qcomReciterId}/by_chapter/${surahNumber}?per_page=300`;
         const data = await fetchWithTimeout(url, 8000);
         if (data && Array.isArray(data.audio_files)) {
@@ -1290,9 +1301,9 @@
         // Try chapter-level audio if per-verse audio is unavailable.
       }
 
-      if (audioMap.size === 0) {
+      if (audioMap.size === 0 && chapterReciterId) {
         try {
-          const chapUrl = `https://api.quran.com/api/v4/chapter_recitations/${qcomReciterId}/${surahNumber}?segments=true`;
+          const chapUrl = `https://api.quran.com/api/v4/chapter_recitations/${chapterReciterId}/${surahNumber}?segments=true`;
           const chapData = await fetchWithTimeout(chapUrl, 8000);
           const audioFile = chapData && chapData.audio_file;
           if (audioFile && audioFile.audio_url && Array.isArray(audioFile.timestamps)) {
@@ -1351,7 +1362,7 @@
 
         if (loadToken !== state.activeLoadToken) return;
 
-        await loadReciterTimingData(surahNumber, state.reciterQcomId, () => loadToken === state.activeLoadToken && reciterToken === state.reciterLoadToken);
+        await loadReciterTimingData(surahNumber, state.reciterQcomId, () => loadToken === state.activeLoadToken && reciterToken === state.reciterLoadToken, state.chapterReciterId);
         if (loadToken !== state.activeLoadToken) return;
 
         if (!alquranRes || !Array.isArray(alquranRes.data) || alquranRes.data.length < 2) {
@@ -2235,13 +2246,14 @@
     dom.reciterSelect.addEventListener('change', async (e) => {
       const selectedOpt = e.target.options[e.target.selectedIndex];
       state.reciterFolder = selectedOpt.value;
-      state.reciterQcomId = Number(selectedOpt.dataset.qcomId) || 4;
+      state.reciterQcomId = Number(selectedOpt.dataset.qcomId || 0);
+      state.chapterReciterId = Number(selectedOpt.dataset.chapterId || 0);
       const wasPlaying = state.isPlaying;
       const selectedVerseIdx = state.currentVerseIdx;
       const reciterToken = ++state.reciterLoadToken;
       stopPlayback();
       setStatus('loading', 'Hafız Yükleniyor...');
-      await loadReciterTimingData(state.currentSurahNumber, state.reciterQcomId, () => reciterToken === state.reciterLoadToken);
+      await loadReciterTimingData(state.currentSurahNumber, state.reciterQcomId, () => reciterToken === state.reciterLoadToken, state.chapterReciterId);
       if (reciterToken !== state.reciterLoadToken) return;
       setStatus('ready', 'Hazır');
       if (wasPlaying) {
