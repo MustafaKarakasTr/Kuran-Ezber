@@ -694,7 +694,7 @@
       'حتى': 'Kadar / Nihayet',
       'قد': 'Elbette / Gerçekten',
       'لقد': 'Andolsun / Gerçekten',
-      'لم': 'Madı / Medi',
+      'لم': 'Geçmiş zaman olumsuzluk edatı',
       'لن': 'Asla',
       'لا': 'Hayır / Değil / Yapma',
       'نعم': 'Evet / Ne güzel',
@@ -898,6 +898,8 @@
         [/gh/gi, 'ğ'],
         [/th/gi, 's'],
         [/dh/gi, 'z'],
+        [/aw/gi, 'av'],
+        [/ay/gi, 'ay'],
         [/aa/gi, 'â'],
         [/ee/gi, 'î'],
         [/oo/gi, 'û'],
@@ -922,9 +924,7 @@
         [/q/g, 'k'],
         [/Q/g, 'K'],
         [/w/g, 'v'],
-        [/W/g, 'V'],
-        [/aw/gi, 'ev'],
-        [/ay/gi, 'ey']
+        [/W/g, 'V']
       ];
 
       for (const [pattern, replacement] of rules) {
@@ -979,6 +979,8 @@
       showWordMeaning: true,
       isTransitioningVerse: false,
       activeLoadToken: 0,
+      reciterLoadToken: 0,
+      playbackRequestToken: 0,
       lastWatchdogTime: -1,
       watchdogStallTicks: 0,
       preloadAudioObj: null,
@@ -1267,9 +1269,9 @@
       dom.endVerseSelect.value = String(totalAyahs);
     }
 
-    async function loadReciterTimingData(surahNumber, qcomReciterId) {
-      state.reciterAudioMap.clear();
-      state.chapterRecitationData = null;
+    async function loadReciterTimingData(surahNumber, qcomReciterId, isCurrent = () => true) {
+      const audioMap = new Map();
+      let chapterData = null;
 
       try {
         const url = `https://api.quran.com/api/v4/recitations/${qcomReciterId}/by_chapter/${surahNumber}?per_page=300`;
@@ -1277,16 +1279,18 @@
         if (data && Array.isArray(data.audio_files)) {
           data.audio_files.forEach((af) => {
             if (af.verse_key && af.url) {
-              state.reciterAudioMap.set(af.verse_key, {
+              audioMap.set(af.verse_key, {
                 audioUrl: resolveQcomAudioUrl(af.url),
                 segments: Array.isArray(af.segments) ? af.segments : []
               });
             }
           });
         }
-      } catch (e) {}
+      } catch (e) {
+        // Try chapter-level audio if per-verse audio is unavailable.
+      }
 
-      if (state.reciterAudioMap.size === 0) {
+      if (audioMap.size === 0) {
         try {
           const chapUrl = `https://api.quran.com/api/v4/chapter_recitations/${qcomReciterId}/${surahNumber}?segments=true`;
           const chapData = await fetchWithTimeout(chapUrl, 8000);
@@ -1302,17 +1306,23 @@
                 });
               }
             });
-            state.chapterRecitationData = {
-              audioUrl: audioFile.audio_url,
-              timestampsMap: tsMap
-            };
+            chapterData = { audioUrl: audioFile.audio_url, timestampsMap: tsMap };
           }
-        } catch (e) {}
+        } catch (e) {
+          // Per-ayah EveryAyah audio remains the final fallback.
+        }
+      }
+
+      // Commit atomically only if this request still belongs to the active selection.
+      if (isCurrent()) {
+        state.reciterAudioMap = audioMap;
+        state.chapterRecitationData = chapterData;
       }
     }
 
     async function loadSurahData(surahNumber) {
       const loadToken = ++state.activeLoadToken;
+      const reciterToken = ++state.reciterLoadToken;
       stopPlayback();
       state.currentSurahNumber = Number(surahNumber);
 
@@ -1341,7 +1351,7 @@
 
         if (loadToken !== state.activeLoadToken) return;
 
-        await loadReciterTimingData(surahNumber, state.reciterQcomId);
+        await loadReciterTimingData(surahNumber, state.reciterQcomId, () => loadToken === state.activeLoadToken && reciterToken === state.reciterLoadToken);
         if (loadToken !== state.activeLoadToken) return;
 
         if (!alquranRes || !Array.isArray(alquranRes.data) || alquranRes.data.length < 2) {
@@ -1444,8 +1454,9 @@
         if (loadToken !== state.activeLoadToken) return;
         dom.loadingSpinner.classList.add('hidden');
         dom.retryLoadBtn.classList.remove('hidden');
-        dom.feedbackMessage.textContent = 'Bağlantı zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edip yeniden deneyin.';
-        setStatus('error', 'Bağlantı Hatası');
+        const reason = err && err.message ? err.message : 'Bilinmeyen hata';
+        dom.feedbackMessage.textContent = `Sure verisi yüklenemedi (${reason}). İnternet bağlantınızı kontrol edip yeniden deneyin.`;
+        setStatus('error', 'Yükleme Hatası');
       }
     }
 
@@ -1547,10 +1558,12 @@
 
         const mealBox = document.createElement('div');
         mealBox.className = 'mt-4 pt-3 border-t border-ivoryBorder/70 dark:border-nightBorder/70 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed flex items-start gap-2';
-        mealBox.innerHTML = `
-          <span class="font-semibold text-emeraldBrand dark:text-emerald-400 shrink-0">Diyanet Meali:</span>
-          <p>${verse.diyanetTranslation}</p>
-        `;
+        const mealLabel = document.createElement('span');
+        mealLabel.className = 'font-semibold text-emeraldBrand dark:text-emerald-400 shrink-0';
+        mealLabel.textContent = 'Diyanet Meali:';
+        const mealText = document.createElement('p');
+        mealText.textContent = verse.diyanetTranslation || 'Meal bulunamadı.';
+        mealBox.append(mealLabel, mealText);
         card.appendChild(mealBox);
 
         dom.versesListContainer.appendChild(card);
@@ -1726,6 +1739,7 @@
       clearPauseTimer();
       clearAllActiveWordHighlights();
       state.currentVerseIdx = verseIdx;
+      const playbackToken = ++state.playbackRequestToken;
       state.isTransitioningVerse = true;
       state.watchdogStallTicks = 0;
       state.lastWatchdogTime = -1;
@@ -1754,6 +1768,7 @@
         audio.dataset.fallbackIdx = '0';
 
         const onMeta = () => {
+          if (playbackToken !== state.playbackRequestToken) return;
           state.isTransitioningVerse = false;
           dom.timeDuration.textContent = formatTime(audio.duration);
           if (relSeek > 0 && isFinite(audio.duration)) {
@@ -1773,6 +1788,7 @@
 
         const startSec = (ts.fromMs / 1000) + (relSeek * ((ts.toMs - ts.fromMs) / 1000));
         const applyChapterSeek = () => {
+          if (playbackToken !== state.playbackRequestToken) return;
           audio.currentTime = Math.max(0, startSec);
           state.isTransitioningVerse = false;
           dom.timeDuration.textContent = formatTime((ts.toMs - ts.fromMs) / 1000);
@@ -1790,6 +1806,7 @@
         audio.dataset.fallbackIdx = '0';
 
         const onMeta = () => {
+          if (playbackToken !== state.playbackRequestToken) return;
           state.isTransitioningVerse = false;
           dom.timeDuration.textContent = formatTime(audio.duration);
           if (relSeek > 0 && isFinite(audio.duration)) {
@@ -1804,13 +1821,23 @@
       const playPromise = audio.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise.then(() => {
+          if (playbackToken !== state.playbackRequestToken) return;
           state.isTransitioningVerse = false;
           preloadNextVerseAudio(verseIdx + 1);
-        }).catch(() => {});
+        }).catch(() => {
+          if (playbackToken !== state.playbackRequestToken) return;
+          state.isTransitioningVerse = false;
+          // Let the media 'error' event try the configured fallback source first.
+          if (!audio.error) {
+            updatePlayPauseButtonsUI(false);
+            setStatus('error', 'Ses Başlatılamadı');
+          }
+        });
       }
     }
 
     function stopPlayback() {
+      state.playbackRequestToken += 1;
       clearPauseTimer();
       state.isPlayingIntro = false;
       state.introStage = null;
@@ -1966,16 +1993,10 @@
         if (state.isPlaying && !audio.paused && !state.isTransitioningVerse) {
           const curSec = audio.currentTime || 0;
 
-          if (Math.abs(curSec - state.lastWatchdogTime) < 0.001) {
-            state.watchdogStallTicks += 1;
-            if (state.watchdogStallTicks > 240) {
-              state.watchdogStallTicks = 0;
-              handleVersePlaybackFinished();
-            }
-          } else {
-            state.watchdogStallTicks = 0;
-            state.lastWatchdogTime = curSec;
-          }
+          // Do not treat a stalled/buffering audio stream as an ended verse.
+          // HTMLMediaElement 'ended' and chapter timestamp boundaries handle completion.
+          state.lastWatchdogTime = curSec;
+          state.watchdogStallTicks = 0;
 
           if (state.isPlayingIntro) {
             const dur = audio.duration || 0;
@@ -2168,8 +2189,15 @@
         const idx = Number(dom.audio.dataset.fallbackIdx || '0');
         if (idx < fallbacks.length) {
           dom.audio.dataset.fallbackIdx = String(idx + 1);
+          state.playbackSourceMode = 'everyayah-fallback';
+          state.activeVerseStartMs = 0;
+          state.activeVerseEndMs = 0;
           dom.audio.src = fallbacks[idx];
-          dom.audio.play().catch(() => {});
+          dom.audio.currentTime = 0;
+          dom.audio.play().catch(() => {
+            stopPlayback();
+            setStatus('error', 'Ses Başlatılamadı');
+          });
           return;
         }
       } catch (e) {}
@@ -2209,12 +2237,15 @@
       state.reciterFolder = selectedOpt.value;
       state.reciterQcomId = Number(selectedOpt.dataset.qcomId) || 4;
       const wasPlaying = state.isPlaying;
+      const selectedVerseIdx = state.currentVerseIdx;
+      const reciterToken = ++state.reciterLoadToken;
       stopPlayback();
       setStatus('loading', 'Hafız Yükleniyor...');
-      await loadReciterTimingData(state.currentSurahNumber, state.reciterQcomId);
+      await loadReciterTimingData(state.currentSurahNumber, state.reciterQcomId, () => reciterToken === state.reciterLoadToken);
+      if (reciterToken !== state.reciterLoadToken) return;
       setStatus('ready', 'Hazır');
       if (wasPlaying) {
-        playVerse(state.currentVerseIdx, 0);
+        playVerse(selectedVerseIdx, 0);
       }
     });
 
